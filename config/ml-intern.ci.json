@@ -1,0 +1,16 @@
+{
+  "model_name": "zai-org/GLM-5.2:novita",
+  "save_sessions": false,
+  "share_traces": false,
+  "yolo_mode": true,
+  "confirm_cpu_jobs": true,
+  "auto_file_upload": false,
+  "tool_runtime": "local",
+  "messaging": {
+    "enabled": false,
+    "auto_event_types": [],
+    "destinations": {}
+  },
+  "mcpServers": {}
+}
+

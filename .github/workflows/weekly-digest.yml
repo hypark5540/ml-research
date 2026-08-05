@@ -1,0 +1,149 @@
+name: Weekly ML Research Digest
+
+on:
+  workflow_dispatch:
+    inputs:
+      week_of:
+        description: Digest publication date in YYYY-MM-DD (defaults to today)
+        required: false
+        type: string
+  # The weekly cron is intentionally activated only after the owner confirms
+  # the publication day and time. Proposed: Sunday 09:00 Asia/Seoul (00:00 UTC).
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-ml-research-digest
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      BLOG_REPO: hypark5540/hyoyoul-blog-v1
+      BLOG_PATH: blog
+      ML_INTERN_CLI_CONFIG: ${{ github.workspace }}/config/ml-intern.ci.json
+    steps:
+      - name: Check out automation
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Check out blog
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ env.BLOG_REPO }}
+          token: ${{ secrets.BLOG_REPO_TOKEN }}
+          path: ${{ env.BLOG_PATH }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: blog/package-lock.json
+
+      - name: Install research runtime
+        run: |
+          python3 -m pip install --disable-pip-version-check -e '.[dev]'
+          python3 -m pip install --disable-pip-version-check \
+            'git+https://github.com/huggingface/ml-intern.git@550a209701701e6a9ac7cac70b8dbd508822d467'
+
+      - name: Resolve publication date
+        id: date
+        env:
+          REQUESTED_WEEK: ${{ inputs.week_of }}
+        run: |
+          if [[ -n "$REQUESTED_WEEK" ]]; then
+            date -j -f '%Y-%m-%d' "$REQUESTED_WEEK" '+%Y-%m-%d' >/dev/null 2>&1 || \
+              date -d "$REQUESTED_WEEK" '+%Y-%m-%d' >/dev/null
+            week_of="$REQUESTED_WEEK"
+          else
+            week_of="$(TZ=Asia/Seoul date '+%Y-%m-%d')"
+          fi
+          printf 'week_of=%s\n' "$week_of" >> "$GITHUB_OUTPUT"
+
+      - name: Render autonomous research prompt
+        run: |
+          mkdir -p generated
+          python3 scripts/render_prompt.py \
+            --topics config/topics.json \
+            --archive blog/content/public/research-digests.generated.json \
+            --output generated/weekly-digest.json \
+            --week-of '${{ steps.date.outputs.week_of }}' \
+            > "$RUNNER_TEMP/ml-research-prompt.txt"
+
+      - name: Research and write digest candidate
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          S2_API_KEY: ${{ secrets.S2_API_KEY }}
+        run: ml-intern --no-stream --max-iterations 60 "$(< "$RUNNER_TEMP/ml-research-prompt.txt")"
+
+      - name: Validate and publish generated data
+        run: |
+          python3 scripts/validate_digest.py generated/weekly-digest.json
+          python3 scripts/publish_digest.py \
+            --digest generated/weekly-digest.json \
+            --target blog/content/public/research-digests.generated.json
+          python3 scripts/validate_digest.py \
+            --archive blog/content/public/research-digests.generated.json
+
+      - name: Verify agent write boundaries
+        run: |
+          if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+            echo 'The research agent modified tracked automation files.' >&2
+            git status --short >&2
+            exit 1
+          fi
+          changed="$(git -C blog diff --name-only)"
+          if [[ "$changed" != 'content/public/research-digests.generated.json' ]]; then
+            echo 'Unexpected blog files changed:' >&2
+            printf '%s\n' "$changed" >&2
+            exit 1
+          fi
+
+      - name: Validate automation project
+        run: |
+          python3 -m ruff check .
+          python3 -m ruff format --check .
+          python3 -m pytest
+
+      - name: Validate HYOYOUL BLOG
+        working-directory: blog
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Commit and push digest branch
+        working-directory: blog
+        env:
+          WEEK_OF: ${{ steps.date.outputs.week_of }}
+          BLOG_REPO_TOKEN: ${{ secrets.BLOG_REPO_TOKEN }}
+        run: |
+          branch="automation/ml-research-${WEEK_OF}-${GITHUB_RUN_ID}"
+          git switch -c "$branch"
+          git add content/public/research-digests.generated.json
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -m "research: publish weekly ML digest ${WEEK_OF}"
+          auth="$(printf 'x-access-token:%s' "$BLOG_REPO_TOKEN" | base64 --wrap=0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" \
+            push --set-upstream origin "$branch"
+          unset auth
+          printf 'BLOG_BRANCH=%s\n' "$branch" >> "$GITHUB_ENV"
+
+      - name: Open blog pull request
+        env:
+          BLOG_REPO_TOKEN: ${{ secrets.BLOG_REPO_TOKEN }}
+        run: |
+          python3 scripts/open_blog_pr.py \
+            --repo "$BLOG_REPO" \
+            --branch "$BLOG_BRANCH" \
+            --week-of '${{ steps.date.outputs.week_of }}'

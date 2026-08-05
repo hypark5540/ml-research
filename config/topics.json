@@ -1,0 +1,50 @@
+{
+  "audience": "A senior data engineer expanding into production machine learning and AI systems",
+  "languagePolicy": "Publish complete Korean and English versions",
+  "paperCount": {
+    "minimum": 3,
+    "maximum": 5
+  },
+  "tracks": [
+    {
+      "name": "ML systems and data",
+      "queries": [
+        "machine learning systems data quality",
+        "feature store training serving skew",
+        "data-centric AI evaluation"
+      ]
+    },
+    {
+      "name": "LLM and agent engineering",
+      "queries": [
+        "LLM agent evaluation reliability",
+        "retrieval augmented generation evaluation",
+        "tool using language model systems"
+      ]
+    },
+    {
+      "name": "Efficient training and inference",
+      "queries": [
+        "efficient language model training inference",
+        "model compression quantization serving",
+        "distributed machine learning systems"
+      ]
+    },
+    {
+      "name": "Reliability and safety",
+      "queries": [
+        "machine learning observability monitoring",
+        "AI system robustness evaluation",
+        "language model factuality uncertainty"
+      ]
+    }
+  ],
+  "selectionRules": [
+    "Prefer papers published or substantially revised during the previous seven days.",
+    "Prefer concrete methodology, experiments, reusable system ideas, or released code over broad position papers.",
+    "Balance practical relevance, novelty, evidence quality, and topic diversity.",
+    "Do not repeat an arXiv paper that already appears in the public digest archive.",
+    "Skip papers whose important claims cannot be verified from the paper body or primary project materials."
+  ]
+}
+
