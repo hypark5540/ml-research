@@ -69,9 +69,8 @@ python3 scripts/validate_digest.py \
 
 ## 예약 실행
 
-현재 workflow는 `workflow_dispatch` 수동 실행만 활성화되어 있습니다. 소유자가
-요일과 시간을 확정하면 cron을 활성화합니다. 제안 시간은 **매주 일요일 오전
-9시(Asia/Seoul, 일요일 00:00 UTC)** 입니다.
+GitHub Actions cron은 **매주 일요일 오전 9시(Asia/Seoul, 일요일 00:00 UTC)** 에
+실행됩니다. 필요할 때는 `workflow_dispatch`로 수동 실행할 수도 있습니다.
 
 수동 실행의 `week_of` 입력은 `YYYY-MM-DD`이며 비우면 서울 기준 실행 날짜를
 사용합니다.

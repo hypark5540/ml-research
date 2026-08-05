@@ -1,15 +1,15 @@
 name: Weekly ML Research Digest
 
 on:
+  schedule:
+    # Every Sunday at 09:00 Asia/Seoul (00:00 UTC).
+    - cron: '0 0 * * 0'
   workflow_dispatch:
     inputs:
       week_of:
         description: Digest publication date in YYYY-MM-DD (defaults to today)
         required: false
         type: string
-  # The weekly cron is intentionally activated only after the owner confirms
-  # the publication day and time. Proposed: Sunday 09:00 Asia/Seoul (00:00 UTC).
-
 permissions:
   contents: read
 
