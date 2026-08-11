@@ -17,7 +17,7 @@ dev = [
 ]
 
 [tool.uv]
-required-version = "==0.12.3"
+required-version = "==0.11.31"
 
 [tool.uv.sources]
 ml-intern = { git = "https://github.com/huggingface/ml-intern.git", rev = "550a209701701e6a9ac7cac70b8dbd508822d467" }
