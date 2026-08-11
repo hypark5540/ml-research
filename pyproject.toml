@@ -5,14 +5,22 @@ description = "Weekly ML research digest pipeline for HYOYOUL BLOG"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "ml-intern",
     "pydantic>=2.12,<3",
 ]
 
 [project.optional-dependencies]
 dev = [
+    "pip-audit>=2.9,<3",
     "pytest>=9,<10",
     "ruff>=0.15,<0.16",
 ]
+
+[tool.uv]
+required-version = "==0.12.3"
+
+[tool.uv.sources]
+ml-intern = { git = "https://github.com/huggingface/ml-intern.git", rev = "550a209701701e6a9ac7cac70b8dbd508822d467" }
 
 [build-system]
 requires = ["setuptools>=75"]

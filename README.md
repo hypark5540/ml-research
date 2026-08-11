@@ -7,19 +7,21 @@ HYOYOUL BLOG의 공개 `Research` 카테고리에 매주 3~5편의 머신러닝
 
 ```text
 ml-research GitHub Actions
-  -> ML Intern 논문 검색·본문 조사
-  -> 단일 주간 다이제스트 JSON 생성
-  -> Pydantic 스키마·중복·출처 검증
-  -> HYOYOUL BLOG 생성 데이터 갱신
+  -> context job: 블로그에서 공개 다이제스트 목록만 격리
+  -> research job: ML Intern 조사와 단일 JSON 생성
+  -> publish job: 새 runner에서 스키마·중복·출처 재검증
+  -> 검증된 HYOYOUL BLOG 생성 데이터만 갱신
   -> 양쪽 테스트와 블로그 프로덕션 빌드
   -> automation/ml-research-* 브랜치와 공개 PR
   -> 블로그 CI 성공 시 제한된 자동 머지
   -> main 연동 Vercel 배포
 ```
 
-연구 에이전트는 블로그를 직접 편집하지 않습니다. 출력은
-`generated/weekly-digest.json` 하나로 제한되고, 검증된 데이터만 블로그의
-`content/public/research-digests.generated.json`에 원자적으로 병합됩니다.
+연구 에이전트는 블로그를 checkout하거나 직접 편집하지 않으며
+`BLOG_REPO_TOKEN`도 받지 않습니다. 공개된 과거 다이제스트 목록과 `HF_TOKEN`만
+있는 독립 runner에서 동작합니다. 출력은 `generated/weekly-digest.json` 하나로
+제한되고, 별도의 신뢰된 publish job이 다시 검증한 데이터만 블로그의
+`content/public/research-digests.generated.json`에 원자적으로 병합합니다.
 
 ## 편집 정책
 
@@ -40,23 +42,26 @@ ml-research GitHub Actions
 
 `ml-research` 저장소의 Actions secrets에 다음 값을 등록해야 합니다.
 
-- `HF_TOKEN`: Hugging Face Inference Providers 호출 권한
+- `HF_TOKEN`: **Make calls to Inference Providers** 권한이 있는 Hugging Face token
 - `BLOG_REPO_TOKEN`: `hypark5540/hyoyoul-blog-v1`에 대해 Contents와 Pull
   requests 읽기/쓰기 권한이 있는 fine-grained token
 - `S2_API_KEY`: 선택 사항이지만 Semantic Scholar rate limit 안정성을 위해 권장
 
-토큰 값은 프롬프트나 생성 JSON에 넣지 않습니다. `BLOG_REPO_TOKEN`은 블로그
-체크아웃, 자동화 브랜치 push, PR 생성에만 사용합니다.
+토큰 값은 프롬프트나 생성 JSON에 넣지 않습니다. `BLOG_REPO_TOKEN`은 에이전트와
+분리된 context/publish job의 블로그 checkout, 자동화 브랜치 push, PR 생성에만
+사용합니다. 로컬 `.env`에는 HF 토큰만 두고 블로그 PAT는 Actions secret으로만
+보관해야 로컬 ML Intern의 dotenv 자동 로드 범위에서도 분리됩니다.
 
 ## 로컬 검증
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install -e '.[dev]'
-python3 -m ruff check .
-python3 -m ruff format --check .
-python3 -m pytest
+uv sync --frozen --extra dev
+uv run --frozen ruff check .
+uv run --frozen ruff format --check .
+uv run --frozen pytest
+uv export --frozen --extra dev --no-hashes \
+  --no-emit-project --no-emit-package ml-intern \
+  | uv run --frozen pip-audit --strict --disable-pip --no-deps -r /dev/stdin
 ```
 
 다이제스트 또는 전체 공개 아카이브는 다음처럼 검사합니다.

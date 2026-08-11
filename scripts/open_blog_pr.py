@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -85,17 +84,6 @@ def main() -> int:
             "draft": False,
         },
     )
-
-    try:
-        github_request(
-            "POST",
-            f"/repos/{args.repo}/issues/{pull['number']}/labels",
-            token,
-            {"labels": ["automated-research"]},
-        )
-    except urllib.error.HTTPError as error:
-        if error.code != 422:
-            raise
 
     print(json.dumps(pull, ensure_ascii=False))
     return 0
