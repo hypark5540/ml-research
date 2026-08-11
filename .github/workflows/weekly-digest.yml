@@ -10,6 +10,7 @@ on:
         description: Digest publication date in YYYY-MM-DD (defaults to today)
         required: false
         type: string
+
 permissions:
   contents: read
 
@@ -18,20 +19,167 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  context:
+    name: Prepare public research context
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 10
+    outputs:
+      week_of: ${{ steps.date.outputs.week_of }}
+    steps:
+      - name: Check out the public digest archive only
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: hypark5540/hyoyoul-blog-v1
+          token: ${{ secrets.BLOG_REPO_TOKEN }}
+          path: blog
+          sparse-checkout: content/public/research-digests.generated.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Resolve publication date strictly
+        id: date
+        env:
+          REQUESTED_WEEK: ${{ inputs.week_of }}
+        run: |
+          python3 - <<'PY'
+          from datetime import date, datetime
+          import os
+          from zoneinfo import ZoneInfo
+
+          requested = os.environ.get("REQUESTED_WEEK", "").strip()
+          if requested:
+              try:
+                  week_of = date.fromisoformat(requested)
+              except ValueError as error:
+                  raise SystemExit("week_of must be an exact YYYY-MM-DD date") from error
+              if week_of.isoformat() != requested:
+                  raise SystemExit("week_of must be an exact YYYY-MM-DD date")
+          else:
+              week_of = datetime.now(ZoneInfo("Asia/Seoul")).date()
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"week_of={week_of.isoformat()}", file=output)
+          PY
+
+      - name: Stage public context
+        run: |
+          test -s blog/content/public/research-digests.generated.json
+          mkdir -p context
+          cp blog/content/public/research-digests.generated.json context/
+
+      - name: Upload public context
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: research-context
+          path: context/research-digests.generated.json
+          if-no-files-found: error
+          retention-days: 3
+
+  research:
+    name: Research in an isolated job
+    needs: context
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    env:
+      ML_INTERN_CLI_CONFIG: ${{ github.workspace }}/config/ml-intern.ci.json
+    steps:
+      - name: Check out public automation
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12.13'
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: '0.12.3'
+          enable-cache: true
+
+      - name: Install locked research runtime
+        run: uv sync --frozen --extra dev
+
+      - name: Download public context
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: research-context
+          path: context
+
+      - name: Render autonomous research prompt
+        env:
+          WEEK_OF: ${{ needs.context.outputs.week_of }}
+        run: |
+          mkdir -p generated
+          uv run --frozen python scripts/render_prompt.py \
+            --topics config/topics.json \
+            --archive context/research-digests.generated.json \
+            --output generated/weekly-digest.json \
+            --week-of "$WEEK_OF" \
+            > "$RUNNER_TEMP/ml-research-prompt.txt"
+
+      - name: Research and write digest candidate
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          S2_API_KEY: ${{ secrets.S2_API_KEY }}
+        run: |
+          uv run --frozen ml-intern --no-stream --max-iterations 60 \
+            "$(< "$RUNNER_TEMP/ml-research-prompt.txt")"
+          test -s generated/weekly-digest.json
+
+      - name: Validate isolated candidate and write boundaries
+        run: |
+          uv run --frozen python scripts/validate_digest.py generated/weekly-digest.json
+          if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+            echo 'The research agent modified tracked automation files.' >&2
+            git status --short >&2
+            exit 1
+          fi
+          uv run --frozen ruff check .
+          uv run --frozen ruff format --check .
+          uv run --frozen pytest
+
+      - name: Upload candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: research-candidate
+          path: generated/weekly-digest.json
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    name: Validate and publish without agent access
+    needs: [context, research]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     env:
       BLOG_REPO: hypark5540/hyoyoul-blog-v1
       BLOG_PATH: blog
-      ML_INTERN_CLI_CONFIG: ${{ github.workspace }}/config/ml-intern.ci.json
     steps:
       - name: Check out automation
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
-      - name: Check out blog
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12.13'
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: '0.12.3'
+          enable-cache: true
+
+      - name: Install locked validation runtime
+        run: uv sync --frozen --extra dev
+
+      - name: Download isolated candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: research-candidate
+          path: generated
+
+      - name: Check out blog after research isolation
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ env.BLOG_REPO }}
@@ -40,62 +188,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: blog/package-lock.json
-
-      - name: Install research runtime
-        run: |
-          python3 -m pip install --disable-pip-version-check -e '.[dev]'
-          python3 -m pip install --disable-pip-version-check \
-            'git+https://github.com/huggingface/ml-intern.git@550a209701701e6a9ac7cac70b8dbd508822d467'
-
-      - name: Resolve publication date
-        id: date
-        env:
-          REQUESTED_WEEK: ${{ inputs.week_of }}
-        run: |
-          if [[ -n "$REQUESTED_WEEK" ]]; then
-            date -j -f '%Y-%m-%d' "$REQUESTED_WEEK" '+%Y-%m-%d' >/dev/null 2>&1 || \
-              date -d "$REQUESTED_WEEK" '+%Y-%m-%d' >/dev/null
-            week_of="$REQUESTED_WEEK"
-          else
-            week_of="$(TZ=Asia/Seoul date '+%Y-%m-%d')"
-          fi
-          printf 'week_of=%s\n' "$week_of" >> "$GITHUB_OUTPUT"
-
-      - name: Render autonomous research prompt
-        run: |
-          mkdir -p generated
-          python3 scripts/render_prompt.py \
-            --topics config/topics.json \
-            --archive blog/content/public/research-digests.generated.json \
-            --output generated/weekly-digest.json \
-            --week-of '${{ steps.date.outputs.week_of }}' \
-            > "$RUNNER_TEMP/ml-research-prompt.txt"
-
-      - name: Research and write digest candidate
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          S2_API_KEY: ${{ secrets.S2_API_KEY }}
-        run: ml-intern --no-stream --max-iterations 60 "$(< "$RUNNER_TEMP/ml-research-prompt.txt")"
-
       - name: Validate and publish generated data
         run: |
-          python3 scripts/validate_digest.py generated/weekly-digest.json
-          python3 scripts/publish_digest.py \
+          uv run --frozen python scripts/validate_digest.py generated/weekly-digest.json
+          uv run --frozen python scripts/publish_digest.py \
             --digest generated/weekly-digest.json \
             --target blog/content/public/research-digests.generated.json
-          python3 scripts/validate_digest.py \
+          uv run --frozen python scripts/validate_digest.py \
             --archive blog/content/public/research-digests.generated.json
 
-      - name: Verify agent write boundaries
+      - name: Verify publish write boundaries
         run: |
           if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
-            echo 'The research agent modified tracked automation files.' >&2
+            echo 'Tracked automation files changed during publish.' >&2
             git status --short >&2
             exit 1
           fi
@@ -108,9 +213,16 @@ jobs:
 
       - name: Validate automation project
         run: |
-          python3 -m ruff check .
-          python3 -m ruff format --check .
-          python3 -m pytest
+          uv run --frozen ruff check .
+          uv run --frozen ruff format --check .
+          uv run --frozen pytest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: blog/package-lock.json
 
       - name: Validate HYOYOUL BLOG
         working-directory: blog
@@ -124,7 +236,7 @@ jobs:
       - name: Commit and push digest branch
         working-directory: blog
         env:
-          WEEK_OF: ${{ steps.date.outputs.week_of }}
+          WEEK_OF: ${{ needs.context.outputs.week_of }}
           BLOG_REPO_TOKEN: ${{ secrets.BLOG_REPO_TOKEN }}
         run: |
           branch="automation/ml-research-${WEEK_OF}-${GITHUB_RUN_ID}"
@@ -143,7 +255,7 @@ jobs:
         env:
           BLOG_REPO_TOKEN: ${{ secrets.BLOG_REPO_TOKEN }}
         run: |
-          python3 scripts/open_blog_pr.py \
+          uv run --frozen python scripts/open_blog_pr.py \
             --repo "$BLOG_REPO" \
             --branch "$BLOG_BRANCH" \
-            --week-of '${{ steps.date.outputs.week_of }}'
+            --week-of '${{ needs.context.outputs.week_of }}'
