@@ -226,11 +226,17 @@ jobs:
           fi
 
           release="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets,isDraft)"
+          unexpected_assets="$(jq -r '[.assets[]? | select(.name != "weekly-digest.json")] | length' <<< "$release")"
+          if [[ "$unexpected_assets" != '0' ]]; then
+            echo "Release ${tag} contains unexpected assets." >&2
+            exit 1
+          fi
           existing_url="$(jq -r '.assets[]? | select(.name == "weekly-digest.json") | .url' <<< "$release")"
           if [[ -n "$existing_url" ]]; then
             curl --fail --silent --show-error --location \
               --proto '=https' --proto-redir '=https' --tlsv1.2 \
               --max-redirs 3 --max-time 30 \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
               --output "$RUNNER_TEMP/existing-weekly-digest.json" \
               "$existing_url"
             cmp --silent generated/weekly-digest.json "$RUNNER_TEMP/existing-weekly-digest.json" || {
