@@ -123,7 +123,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           S2_API_KEY: ${{ secrets.S2_API_KEY }}
         run: |
-          uv run --frozen ml-intern --no-stream --max-iterations 60 \
+          uv run --frozen ml-intern --no-stream --max-iterations 90 \
             "$(< "$RUNNER_TEMP/ml-research-prompt.txt")"
           test -s generated/weekly-digest.json
 
