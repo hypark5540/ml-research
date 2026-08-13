@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from datetime import date, datetime
 from typing import Annotated, Literal
 
@@ -11,12 +12,79 @@ Paragraph = Annotated[str, Field(min_length=60, max_length=2400)]
 ListItem = Annotated[str, Field(min_length=20, max_length=600)]
 
 ARXIV_ID_RE = re.compile(r"^(?:[a-z-]+/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?$", re.I)
+FORBIDDEN_PUBLIC_TEXT_RE = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u200b-\u200d\u202a-\u202e"
+    r"\u2060\u2066-\u2069\ufeff\ufffd]"
+)
+ARXIV_HOSTS = frozenset({"arxiv.org"})
+HUGGING_FACE_HOSTS = frozenset({"huggingface.co"})
+CODE_HOSTS = frozenset({"github.com", "gitlab.com", "bitbucket.org", "codeberg.org"})
+SOURCE_HOSTS = frozenset(
+    {
+        *ARXIV_HOSTS,
+        *HUGGING_FACE_HOSTS,
+        *CODE_HOSTS,
+        "doi.org",
+        "openreview.net",
+        "aclanthology.org",
+        "proceedings.mlr.press",
+    }
+)
 
 
-class PaperDigest(BaseModel):
-    """One primary-source-backed paper recommendation."""
+def iter_public_strings(value: object, path: str = "$") -> Iterator[tuple[str, str]]:
+    """Yield every public string with a stable path for actionable validation errors."""
+
+    if isinstance(value, str):
+        yield path, value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from iter_public_strings(item, f"{path}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            yield from iter_public_strings(item, f"{path}[{index}]")
+
+
+def normalized_host(url: HttpUrl) -> str:
+    return (url.host or "").lower().rstrip(".").removeprefix("www.")
+
+
+def validate_trusted_url(
+    url: HttpUrl, allowed_hosts: frozenset[str], label: str
+) -> None:
+    host = normalized_host(url)
+    if url.scheme != "https":
+        raise ValueError(f"{label} must use HTTPS")
+    if host not in allowed_hosts:
+        raise ValueError(f"{label} uses an untrusted host: {host}")
+    if url.username or url.password:
+        raise ValueError(f"{label} must not include URL credentials")
+    if url.port != 443:
+        raise ValueError(f"{label} must use the default HTTPS port")
+    if url.query or url.fragment:
+        raise ValueError(f"{label} must not include a query string or fragment")
+
+
+class PublicContentModel(BaseModel):
+    """Strict base model for content that will be rendered on the public blog."""
 
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_unsafe_public_text(cls, value: object) -> object:
+        for path, text in iter_public_strings(value):
+            match = FORBIDDEN_PUBLIC_TEXT_RE.search(text)
+            if match:
+                codepoint = f"U+{ord(match.group()):04X}"
+                raise ValueError(
+                    f"forbidden public-text character {codepoint} at {path}"
+                )
+        return value
+
+
+class PaperDigest(PublicContentModel):
+    """One primary-source-backed paper recommendation."""
 
     arxivId: str
     title: ShortText
@@ -44,16 +112,38 @@ class PaperDigest(BaseModel):
         if not ARXIV_ID_RE.fullmatch(self.arxivId):
             raise ValueError(f"invalid arXiv id: {self.arxivId}")
 
+        normalized_id = re.sub(r"v\d+$", "", self.arxivId, flags=re.I)
+        validate_trusted_url(self.paperUrl, ARXIV_HOSTS, "paperUrl")
+        validate_trusted_url(self.pdfUrl, ARXIV_HOSTS, "pdfUrl")
+        if self.huggingFaceUrl:
+            validate_trusted_url(
+                self.huggingFaceUrl, HUGGING_FACE_HOSTS, "huggingFaceUrl"
+            )
+        if self.codeUrl:
+            validate_trusted_url(self.codeUrl, CODE_HOSTS, "codeUrl")
+        for source_url in self.sourceUrls:
+            validate_trusted_url(source_url, SOURCE_HOSTS, "sourceUrls entry")
+
         paper_url = str(self.paperUrl)
-        pdf_url = str(self.pdfUrl)
-        if "arxiv.org/abs/" not in paper_url:
-            raise ValueError("paperUrl must be an arxiv.org abstract URL")
-        if "arxiv.org/pdf/" not in pdf_url:
-            raise ValueError("pdfUrl must be an arxiv.org PDF URL")
-        if self.arxivId.removesuffix("v1") not in paper_url:
-            normalized = re.sub(r"v\d+$", "", self.arxivId)
-            if normalized not in paper_url:
-                raise ValueError("paperUrl does not match arxivId")
+        paper_path = self.paperUrl.path.rstrip("/")
+        pdf_path = self.pdfUrl.path.rstrip("/")
+        versioned_id = rf"{re.escape(normalized_id)}(?:v\d+)?"
+        if not re.fullmatch(rf"/abs/{versioned_id}", paper_path, flags=re.I):
+            raise ValueError("paperUrl must be the matching arxiv.org abstract URL")
+        if not re.fullmatch(rf"/pdf/{versioned_id}(?:\.pdf)?", pdf_path, flags=re.I):
+            raise ValueError("pdfUrl must be the matching arxiv.org PDF URL")
+        if self.huggingFaceUrl and not re.fullmatch(
+            rf"/papers/{versioned_id}",
+            self.huggingFaceUrl.path.rstrip("/"),
+            flags=re.I,
+        ):
+            raise ValueError("huggingFaceUrl must match arxivId")
+
+        for source_url in self.sourceUrls:
+            if normalized_host(
+                source_url
+            ) == "arxiv.org" and normalized_id.lower() not in (source_url.path.lower()):
+                raise ValueError("arXiv sourceUrls entries must match arxivId")
 
         sources = {str(url) for url in self.sourceUrls}
         if paper_url not in sources:
@@ -65,10 +155,8 @@ class PaperDigest(BaseModel):
         return self
 
 
-class WeeklyDigest(BaseModel):
+class WeeklyDigest(PublicContentModel):
     """One bilingual public weekly digest containing three to five papers."""
-
-    model_config = ConfigDict(extra="forbid")
 
     version: Literal[1] = 1
     id: str
@@ -106,10 +194,8 @@ class WeeklyDigest(BaseModel):
         return self
 
 
-class DigestArchive(BaseModel):
+class DigestArchive(PublicContentModel):
     """Versioned document consumed directly by HYOYOUL BLOG."""
-
-    model_config = ConfigDict(extra="forbid")
 
     version: Literal[1] = 1
     digests: list[WeeklyDigest]

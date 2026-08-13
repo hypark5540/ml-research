@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 
 import pytest
@@ -80,6 +81,60 @@ def test_rejects_mismatched_identity() -> None:
     payload = sample_digest()
     payload["id"] = "research-wrong"
     with pytest.raises(ValidationError, match="id must be"):
+        WeeklyDigest.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("value", "codepoint"),
+    [
+        ("깨진 대체문자 �가 포함된 공개 문장입니다.", "U+FFFD"),
+        ("trusted\u202eevil.example", "U+202E"),
+        ("zero\u200bwidth text is deceptive", "U+200B"),
+    ],
+)
+def test_rejects_forbidden_public_text(value: str, codepoint: str) -> None:
+    payload = sample_digest()
+    payload["papers"][0]["limitationsKo"][0] = value
+    with pytest.raises(ValidationError, match=re.escape(codepoint)):
+        WeeklyDigest.model_validate(payload)
+
+
+def test_rejects_deceptive_arxiv_host() -> None:
+    payload = sample_digest()
+    paper = payload["papers"][0]
+    paper["paperUrl"] = f"https://example.com/arxiv.org/abs/{paper['arxivId']}"
+    paper["sourceUrls"][0] = paper["paperUrl"]
+    with pytest.raises(ValidationError, match="paperUrl uses an untrusted host"):
+        WeeklyDigest.model_validate(payload)
+
+
+def test_rejects_mismatched_arxiv_pdf() -> None:
+    payload = sample_digest()
+    payload["papers"][0]["pdfUrl"] = "https://arxiv.org/pdf/2608.99999"
+    with pytest.raises(ValidationError, match="pdfUrl must be the matching"):
+        WeeklyDigest.model_validate(payload)
+
+
+def test_rejects_untrusted_generated_links() -> None:
+    payload = sample_digest()
+    payload["papers"][0]["sourceUrls"].append("https://phishing.example/paper")
+    with pytest.raises(
+        ValidationError, match="sourceUrls entry uses an untrusted host"
+    ):
+        WeeklyDigest.model_validate(payload)
+
+
+def test_rejects_hugging_face_paper_for_a_different_arxiv_id() -> None:
+    payload = sample_digest()
+    payload["papers"][0]["huggingFaceUrl"] = "https://huggingface.co/papers/2608.99999"
+    with pytest.raises(ValidationError, match="huggingFaceUrl must match arxivId"):
+        WeeklyDigest.model_validate(payload)
+
+
+def test_rejects_untrusted_code_host() -> None:
+    payload = sample_digest()
+    payload["papers"][0]["codeUrl"] = "https://downloads.example/research"
+    with pytest.raises(ValidationError, match="codeUrl uses an untrusted host"):
         WeeklyDigest.model_validate(payload)
 
 
