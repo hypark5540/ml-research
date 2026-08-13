@@ -29,7 +29,13 @@ def main() -> int:
         else:
             value = WeeklyDigest.model_validate(payload)
             summary = f"valid digest: {value.id} ({len(value.papers)} papers)"
-    except (OSError, json.JSONDecodeError, ValidationError, TypeError) as error:
+    except (
+        OSError,
+        json.JSONDecodeError,
+        ValidationError,
+        TypeError,
+        ValueError,
+    ) as error:
         print(f"validation failed: {error}")
         return 1
 

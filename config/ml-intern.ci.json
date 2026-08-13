@@ -5,7 +5,7 @@
   "yolo_mode": true,
   "confirm_cpu_jobs": true,
   "auto_file_upload": false,
-  "tool_runtime": "local",
+  "tool_runtime": "sandbox",
   "messaging": {
     "enabled": false,
     "auto_event_types": [],

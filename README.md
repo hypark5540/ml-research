@@ -7,21 +7,25 @@ HYOYOUL BLOG의 공개 `Research` 카테고리에 매주 3~5편의 머신러닝
 
 ```text
 ml-research GitHub Actions
-  -> context job: 블로그에서 공개 다이제스트 목록만 격리
-  -> research job: ML Intern 조사와 단일 JSON 생성
-  -> publish job: 새 runner에서 스키마·중복·출처 재검증
-  -> 검증된 HYOYOUL BLOG 생성 데이터만 갱신
-  -> 양쪽 테스트와 블로그 프로덕션 빌드
-  -> automation/ml-research-* 브랜치와 공개 PR
-  -> 블로그 CI 성공 시 제한된 자동 머지
+  -> context job: 블로그 공개 API에서 주차와 기존 arXiv ID만 격리
+  -> research job: 제한된 ML Intern 조사 도구와 단일 JSON 제출
+  -> validate job: 새 runner와 블로그 production 스키마로 재검증
+  -> publish job: 검증 SHA와 실행 SHA에 결박된 immutable GitHub Release 발행
+  -> 블로그 importer가 release metadata·digest·attestation과 전체 build 재검증
+  -> 검사한 main SHA에만 원자적으로 fast-forward
   -> main 연동 Vercel 배포
 ```
 
 연구 에이전트는 블로그를 checkout하거나 직접 편집하지 않으며
-`BLOG_REPO_TOKEN`도 받지 않습니다. 공개된 과거 다이제스트 목록과 `HF_TOKEN`만
-있는 독립 runner에서 동작합니다. 출력은 `generated/weekly-digest.json` 하나로
-제한되고, 별도의 신뢰된 publish job이 다시 검증한 데이터만 블로그의
-`content/public/research-digests.generated.json`에 원자적으로 병합합니다.
+`BLOG_REPO_TOKEN`도 받지 않습니다. 공개된 주차·arXiv ID 목록과 `HF_TOKEN`만
+있는 독립 runner에서 동작합니다. ML Intern에 노출되는 기능은 `hf_papers`,
+`web_search`, 검증된 `submit_weekly_digest`뿐입니다. 셸·파일 읽기·임의 파일 쓰기·
+동적 OpenAPI/MCP 도구는 등록하지 않습니다. 출력은
+`generated/weekly-digest.json` 하나로 제한되고, 별도의 read-only validate job이
+같은 바이트를 블로그의 production validator에도 확인시킨 뒤에만 최소 권한
+publish job으로 넘깁니다. ML 저장소와 ML Intern은 비공개 블로그 읽기·쓰기 권한을
+전혀 받지 않습니다. 블로그는 공개 API와 immutable release 사이의 데이터만
+교환하고, 자체 일회성 `GITHUB_TOKEN`으로 공개 아카이브에 원자적으로 병합합니다.
 
 ## 편집 정책
 
@@ -40,17 +44,12 @@ ml-research GitHub Actions
 
 ## 필요한 GitHub Actions secrets
 
-`ml-research` 저장소의 Actions secrets에 다음 값을 등록해야 합니다.
+`ml-research` 저장소의 Actions secrets에는 다음 값 하나만 등록합니다.
 
 - `HF_TOKEN`: **Make calls to Inference Providers** 권한이 있는 Hugging Face token
-- `BLOG_REPO_TOKEN`: `hypark5540/hyoyoul-blog-v1`에 대해 Contents와 Pull
-  requests 읽기/쓰기 권한이 있는 fine-grained token
-- `S2_API_KEY`: 선택 사항이지만 Semantic Scholar rate limit 안정성을 위해 권장
 
-토큰 값은 프롬프트나 생성 JSON에 넣지 않습니다. `BLOG_REPO_TOKEN`은 에이전트와
-분리된 context/publish job의 블로그 checkout, 자동화 브랜치 push, PR 생성에만
-사용합니다. 로컬 `.env`에는 HF 토큰만 두고 블로그 PAT는 Actions secret으로만
-보관해야 로컬 ML Intern의 dotenv 자동 로드 범위에서도 분리됩니다.
+토큰 값은 프롬프트나 생성 JSON에 넣지 않습니다. 로컬 `.env`에는 HF 토큰만
+둡니다. 블로그 PAT와 Semantic Scholar API key는 자동화에 필요하지 않습니다.
 
 ## 로컬 검증
 
@@ -76,19 +75,20 @@ python3 scripts/validate_digest.py \
 
 GitHub Actions cron은 **매주 일요일 오전 9시(Asia/Seoul, 일요일 00:00 UTC)** 에
 실행됩니다. 필요할 때는 `workflow_dispatch`로 수동 실행할 수도 있습니다.
+블로그 importer는 같은 날 12시·14시·16시에 공개 release를 확인합니다.
 
 수동 실행의 `week_of` 입력은 `YYYY-MM-DD`이며 비우면 서울 기준 실행 날짜를
 사용합니다.
 
-## 자동 머지 경계
+## 자동 발행 경계
 
-블로그의 별도 `workflow_run` 작업은 다음 조건을 모두 만족할 때만 PR을
-squash merge합니다.
-
-- 블로그 CI가 성공함
-- base가 `main`임
-- head가 같은 블로그 저장소임
-- 브랜치가 `automation/ml-research-`로 시작함
-- PR 본문에 `ml-research-automation:v1` 마커가 있음
-
-조건을 만족하지 않거나 merge API가 거부하면 PR은 열린 상태로 남습니다.
+ML 저장소는 공개 예정인 canonical JSON을 256 KiB로 제한하고, 중복 JSON key와
+credential 형태의 문자열을 거부한 뒤 주차별 GitHub Release로만 발행합니다.
+발행 전 블로그 production validator가 같은 SHA-256을 승인해야 합니다. Release는
+정확한 workflow `GITHUB_SHA`, 단일 `weekly-digest.json`, 서버가 기록한 SHA-256,
+GitHub release attestation을 모두 만족해야 하며 immutability가 꺼져 있으면
+게시 직후 검증에서 실패하고 블로그도 해당 release를 거부합니다. 블로그 importer는
+서울 현재일 기준 미래 또는 14일보다 오래된 주차,
+기존 글 변경, 중복 주차, 허용되지 않은 URL·문자·필드를 거부하고 전체 블로그
+테스트와 프로덕션 빌드를 실행합니다. 검증을 시작한 `main` SHA가 그대로일 때만
+단일 커밋을 non-force fast-forward합니다.
