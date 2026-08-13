@@ -90,6 +90,7 @@ def test_rejects_mismatched_identity() -> None:
         ("깨진 대체문자 �가 포함된 공개 문장입니다.", "U+FFFD"),
         ("trusted\u202eevil.example", "U+202E"),
         ("zero\u200bwidth text is deceptive", "U+200B"),
+        ("unpaired \ud800 surrogate is unsafe", "U+D800"),
     ],
 )
 def test_rejects_forbidden_public_text(value: str, codepoint: str) -> None:
@@ -135,6 +136,46 @@ def test_rejects_untrusted_code_host() -> None:
     payload = sample_digest()
     payload["papers"][0]["codeUrl"] = "https://downloads.example/research"
     with pytest.raises(ValidationError, match="codeUrl uses an untrusted host"):
+        WeeklyDigest.model_validate(payload)
+
+
+def test_rejects_empty_venue() -> None:
+    payload = sample_digest()
+    payload["papers"][0]["venue"] = ""
+    with pytest.raises(ValidationError):
+        WeeklyDigest.model_validate(payload)
+
+
+def test_rejects_generated_at_without_timezone() -> None:
+    payload = sample_digest()
+    payload["generatedAt"] = "2026-08-06T09:00:00"
+    with pytest.raises(ValidationError, match="explicit timezone"):
+        WeeklyDigest.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://ARXIV.org/abs/2608.01234",
+        "https://arxiv.org:443/abs/2608.01234",
+        "https://user@arxiv.org/abs/2608.01234",
+    ],
+)
+def test_rejects_noncanonical_raw_urls(url: str) -> None:
+    payload = sample_digest()
+    payload["papers"][0]["paperUrl"] = url
+    payload["papers"][0]["sourceUrls"][0] = url
+    with pytest.raises(ValidationError, match="canonical|credentials|explicit port"):
+        WeeklyDigest.model_validate(payload)
+
+
+def test_rejects_credential_shaped_public_text() -> None:
+    payload = sample_digest()
+    fake_token = "hf_" + "a" * 30
+    payload["papers"][0]["summaryEn"] += (
+        f" Accidental token {fake_token} must never be public."
+    )
+    with pytest.raises(ValidationError, match="credential-shaped"):
         WeeklyDigest.model_validate(payload)
 
 

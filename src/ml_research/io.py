@@ -7,9 +7,18 @@ from pathlib import Path
 from typing import Any
 
 
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON object key: {key}")
+        value[key] = item
+    return value
+
+
 def read_json(path: Path) -> Any:
     with path.open(encoding="utf-8") as handle:
-        return json.load(handle)
+        return json.load(handle, object_pairs_hook=_unique_object)
 
 
 def atomic_write_json(path: Path, value: Any) -> None:

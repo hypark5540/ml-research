@@ -4,8 +4,11 @@ import re
 from collections.abc import Iterator
 from datetime import date, datetime
 from typing import Annotated, Literal
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+
+from ml_research.public_scan import find_public_secret
 
 ShortText = Annotated[str, Field(min_length=8, max_length=240)]
 Paragraph = Annotated[str, Field(min_length=60, max_length=2400)]
@@ -14,7 +17,7 @@ ListItem = Annotated[str, Field(min_length=20, max_length=600)]
 ARXIV_ID_RE = re.compile(r"^(?:[a-z-]+/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?$", re.I)
 FORBIDDEN_PUBLIC_TEXT_RE = re.compile(
     r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u200b-\u200d\u202a-\u202e"
-    r"\u2060\u2066-\u2069\ufeff\ufffd]"
+    r"\u2060\u2066-\u2069\ud800-\udfff\ufeff\ufffd]"
 )
 ARXIV_HOSTS = frozenset({"arxiv.org"})
 HUGGING_FACE_HOSTS = frozenset({"huggingface.co"})
@@ -65,6 +68,22 @@ def validate_trusted_url(
         raise ValueError(f"{label} must not include a query string or fragment")
 
 
+def validate_raw_url(value: object, label: str) -> None:
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be a string URL")
+    if any(character.isspace() for character in value) or "\\" in value:
+        raise ValueError(f"{label} must use canonical URL encoding")
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError(f"{label} must use canonical HTTPS")
+    if parsed.username or parsed.password or parsed.port is not None:
+        raise ValueError(f"{label} must not contain credentials or an explicit port")
+    if parsed.netloc != parsed.netloc.lower() or parsed.netloc != parsed.hostname:
+        raise ValueError(f"{label} must use a canonical lowercase host")
+    if not parsed.path.startswith("/") or urlunsplit(parsed) != value:
+        raise ValueError(f"{label} must use canonical URL encoding")
+
+
 class PublicContentModel(BaseModel):
     """Strict base model for content that will be rendered on the public blog."""
 
@@ -80,6 +99,9 @@ class PublicContentModel(BaseModel):
                 raise ValueError(
                     f"forbidden public-text character {codepoint} at {path}"
                 )
+            secret = find_public_secret(text)
+            if secret:
+                raise ValueError(f"public text contains {secret} at {path}")
         return value
 
 
@@ -92,7 +114,7 @@ class PaperDigest(PublicContentModel):
         min_length=1, max_length=30
     )
     publishedAt: date
-    venue: Annotated[str, Field(max_length=160)] | None = None
+    venue: Annotated[str, Field(min_length=1, max_length=160)] | None = None
     paperUrl: HttpUrl
     pdfUrl: HttpUrl
     huggingFaceUrl: HttpUrl | None = None
@@ -106,6 +128,21 @@ class PaperDigest(PublicContentModel):
     limitationsKo: list[ListItem] = Field(min_length=1, max_length=4)
     limitationsEn: list[ListItem] = Field(min_length=1, max_length=4)
     sourceUrls: list[HttpUrl] = Field(min_length=1, max_length=8)
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_raw_urls(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        for field in ("paperUrl", "pdfUrl", "huggingFaceUrl", "codeUrl"):
+            raw = value.get(field)
+            if raw is not None:
+                validate_raw_url(raw, field)
+        source_urls = value.get("sourceUrls")
+        if isinstance(source_urls, list):
+            for index, raw in enumerate(source_urls):
+                validate_raw_url(raw, f"sourceUrls[{index}]")
+        return value
 
     @model_validator(mode="after")
     def validate_primary_sources(self) -> PaperDigest:
@@ -187,8 +224,13 @@ class WeeklyDigest(PublicContentModel):
             raise ValueError(f"slug must be weekly-ml-research-digest-{suffix}")
         if len(self.tagsKo) != len(self.tagsEn):
             raise ValueError("Korean and English tags must align")
+        if self.generatedAt.tzinfo is None or self.generatedAt.utcoffset() is None:
+            raise ValueError("generatedAt must include an explicit timezone")
 
-        paper_ids = [re.sub(r"v\d+$", "", paper.arxivId) for paper in self.papers]
+        paper_ids = [
+            re.sub(r"v\d+$", "", paper.arxivId, flags=re.I).lower()
+            for paper in self.papers
+        ]
         if len(set(paper_ids)) != len(paper_ids):
             raise ValueError("a digest cannot recommend the same arXiv paper twice")
         return self
@@ -215,10 +257,34 @@ class DigestArchive(PublicContentModel):
         seen_papers: set[str] = set()
         for digest in self.digests:
             for paper in digest.papers:
-                paper_id = re.sub(r"v\d+$", "", paper.arxivId)
+                paper_id = re.sub(r"v\d+$", "", paper.arxivId, flags=re.I).lower()
                 if paper_id in seen_papers:
                     raise ValueError(
                         f"arXiv paper {paper_id} already appears in another digest"
                     )
                 seen_papers.add(paper_id)
+        return self
+
+
+class DigestContext(PublicContentModel):
+    """Bounded public history used only to prevent duplicate weekly selections."""
+
+    version: Literal[1] = 1
+    weeks: list[date] = Field(max_length=2_000)
+    arxivIds: list[Annotated[str, Field(min_length=7, max_length=40)]] = Field(
+        max_length=10_000
+    )
+
+    @model_validator(mode="after")
+    def validate_context_uniqueness(self) -> DigestContext:
+        if len(set(self.weeks)) != len(self.weeks):
+            raise ValueError("context weeks must be unique")
+
+        normalized_ids: list[str] = []
+        for arxiv_id in self.arxivIds:
+            if not ARXIV_ID_RE.fullmatch(arxiv_id):
+                raise ValueError(f"invalid context arXiv id: {arxiv_id}")
+            normalized_ids.append(re.sub(r"v\d+$", "", arxiv_id, flags=re.I).lower())
+        if len(set(normalized_ids)) != len(normalized_ids):
+            raise ValueError("context arXiv ids must be unique")
         return self
