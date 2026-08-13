@@ -21,6 +21,7 @@ concurrency:
 jobs:
   context:
     name: Prepare public research context
+    if: github.repository == 'hypark5540/ml-research' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -215,24 +216,35 @@ jobs:
           WEEK_OF: ${{ needs.context.outputs.week_of }}
         run: |
           tag="research-${WEEK_OF}"
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            existing_url="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | select(.name == "weekly-digest.json") | .url')"
-            test -n "$existing_url"
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --draft \
+              --title "Weekly ML Research Digest ${WEEK_OF}" \
+              --notes "Machine-readable, schema-validated public digest for HYOYOUL BLOG."
+          fi
+
+          release="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets,isDraft)"
+          existing_url="$(jq -r '.assets[]? | select(.name == "weekly-digest.json") | .url' <<< "$release")"
+          if [[ -n "$existing_url" ]]; then
             curl --fail --silent --show-error --location \
               --proto '=https' --proto-redir '=https' --tlsv1.2 \
               --max-redirs 3 --max-time 30 \
               --output "$RUNNER_TEMP/existing-weekly-digest.json" \
               "$existing_url"
             cmp --silent generated/weekly-digest.json "$RUNNER_TEMP/existing-weekly-digest.json" || {
-              echo "Immutable release ${tag} already exists with different content." >&2
+              echo "Release ${tag} already exists with different content." >&2
               exit 1
             }
-            echo "Immutable release ${tag} already contains the exact candidate."
-            exit 0
+          elif [[ "$(jq -r '.isDraft' <<< "$release")" == 'true' ]]; then
+            gh release upload "$tag" generated/weekly-digest.json --repo "$GITHUB_REPOSITORY"
+          else
+            echo "Published release ${tag} is missing its required immutable asset." >&2
+            exit 1
           fi
 
-          gh release create "$tag" generated/weekly-digest.json \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "Weekly ML Research Digest ${WEEK_OF}" \
-            --notes "Machine-readable, schema-validated public digest for HYOYOUL BLOG."
+          if [[ "$(jq -r '.isDraft' <<< "$release")" == 'true' ]]; then
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false
+          fi
+          echo "Release ${tag} contains the exact immutable candidate."
