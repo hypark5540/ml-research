@@ -75,6 +75,24 @@ Research procedure:
 8. Run this validator and fix every error before finishing:
    python scripts/validate_digest.py {args.output.resolve()}
 
+Execution budget and completion rules:
+- Stop expanding the candidate pool as soon as three strong, reasonably diverse
+  papers have enough primary-source evidence. Do not force one paper from every
+  configured track. Select three papers by default; add a fourth or fifth only
+  when the evidence is already available and the paper materially improves the
+  digest.
+- Consider at most 12 candidates and spend at most 35 tool-call iterations on
+  discovery and evidence gathering. By the next iteration, make the final
+  selection and start writing the JSON. Reserve at least 15 iterations for the
+  file write, validation, and corrections.
+- The JSON Schema below and the validator command above fully define the output.
+  Do not inspect tests, model definitions, or unrelated repository files.
+- If a search provider or date filter is unreliable, verify promising candidates
+  from their primary arXiv pages and move on. Omit an unverifiable claim instead
+  of extending the search indefinitely.
+- Success requires the JSON file to exist at the exact path and the validator to
+  pass. A text-only research summary is not a completed task.
+
 JSON Schema:
 {json.dumps(schema, ensure_ascii=False, indent=2)}
 """
