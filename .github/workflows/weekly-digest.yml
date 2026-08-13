@@ -26,26 +26,22 @@ jobs:
     outputs:
       week_of: ${{ steps.date.outputs.week_of }}
     steps:
-      - name: Check out the public digest archive only
+      - name: Check out public automation
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: hypark5540/hyoyoul-blog-v1
-          token: ${{ secrets.BLOG_REPO_TOKEN }}
-          path: blog
-          sparse-checkout: content/public/research-digests.generated.json
-          sparse-checkout-cone-mode: false
           persist-credentials: false
 
-      - name: Resolve publication date strictly
+      - name: Resolve a bounded Seoul publication date
         id: date
         env:
           REQUESTED_WEEK: ${{ inputs.week_of }}
         run: |
           python3 - <<'PY'
-          from datetime import date, datetime
+          from datetime import date, datetime, timedelta
           import os
           from zoneinfo import ZoneInfo
 
+          today = datetime.now(ZoneInfo("Asia/Seoul")).date()
           requested = os.environ.get("REQUESTED_WEEK", "").strip()
           if requested:
               try:
@@ -55,17 +51,33 @@ jobs:
               if week_of.isoformat() != requested:
                   raise SystemExit("week_of must be an exact YYYY-MM-DD date")
           else:
-              week_of = datetime.now(ZoneInfo("Asia/Seoul")).date()
+              week_of = today
+
+          if week_of > today:
+              raise SystemExit("week_of must not be in the future in Asia/Seoul")
+          if week_of < today - timedelta(days=14):
+              raise SystemExit("week_of must be within the last 14 days")
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               print(f"week_of={week_of.isoformat()}", file=output)
           PY
 
-      - name: Stage public context
+      - name: Download the public digest archive
         run: |
-          test -s blog/content/public/research-digests.generated.json
           mkdir -p context
-          cp blog/content/public/research-digests.generated.json context/
+          curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --max-redirs 3 --max-time 30 \
+            --output context/research-digests.generated.json \
+            https://www.hyoyoul.com/api/research-digests
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("context/research-digests.generated.json")
+          size = path.stat().st_size
+          if size < 2 or size > 2 * 1024 * 1024:
+              raise SystemExit(f"public research archive has an invalid size: {size} bytes")
+          PY
 
       - name: Upload public context
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -73,7 +85,7 @@ jobs:
           name: research-context
           path: context/research-digests.generated.json
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 1
 
   research:
     name: Research in an isolated job
@@ -145,16 +157,15 @@ jobs:
           name: research-candidate
           path: generated/weekly-digest.json
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 1
 
   publish:
-    name: Validate and publish without agent access
+    name: Validate and publish a public immutable release
     needs: [context, research]
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    env:
-      BLOG_REPO: hypark5540/hyoyoul-blog-v1
-      BLOG_PATH: blog
+    timeout-minutes: 20
+    permissions:
+      contents: write
     steps:
       - name: Check out automation
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -179,83 +190,49 @@ jobs:
           name: research-candidate
           path: generated
 
-      - name: Check out blog after research isolation
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ env.BLOG_REPO }}
-          token: ${{ secrets.BLOG_REPO_TOKEN }}
-          path: ${{ env.BLOG_PATH }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Validate and publish generated data
+      - name: Validate the exact public asset
+        env:
+          WEEK_OF: ${{ needs.context.outputs.week_of }}
         run: |
           uv run --frozen python scripts/validate_digest.py generated/weekly-digest.json
-          uv run --frozen python scripts/publish_digest.py \
-            --digest generated/weekly-digest.json \
-            --target blog/content/public/research-digests.generated.json
-          uv run --frozen python scripts/validate_digest.py \
-            --archive blog/content/public/research-digests.generated.json
-
-      - name: Verify publish write boundaries
-        run: |
-          if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
-            echo 'Tracked automation files changed during publish.' >&2
-            git status --short >&2
+          actual_week="$(python3 -c 'import json; print(json.load(open("generated/weekly-digest.json"))["weekOf"])')"
+          if [[ "$actual_week" != "$WEEK_OF" ]]; then
+            echo "Candidate weekOf ${actual_week} does not match ${WEEK_OF}." >&2
             exit 1
           fi
-          changed="$(git -C blog diff --name-only)"
-          if [[ "$changed" != 'content/public/research-digests.generated.json' ]]; then
-            echo 'Unexpected blog files changed:' >&2
-            printf '%s\n' "$changed" >&2
+          size="$(wc -c < generated/weekly-digest.json | tr -d ' ')"
+          if (( size < 2 || size > 262144 )); then
+            echo "Candidate size is outside the 256 KiB release boundary: ${size}." >&2
             exit 1
           fi
-
-      - name: Validate automation project
-        run: |
           uv run --frozen ruff check .
           uv run --frozen ruff format --check .
           uv run --frozen pytest
 
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: blog/package-lock.json
-
-      - name: Validate HYOYOUL BLOG
-        working-directory: blog
-        run: |
-          npm ci
-          npm run lint
-          npm run typecheck
-          npm test
-          npm run build
-
-      - name: Commit and push digest branch
-        working-directory: blog
+      - name: Create the immutable weekly release
         env:
+          GH_TOKEN: ${{ github.token }}
           WEEK_OF: ${{ needs.context.outputs.week_of }}
-          BLOG_REPO_TOKEN: ${{ secrets.BLOG_REPO_TOKEN }}
         run: |
-          branch="automation/ml-research-${WEEK_OF}-${GITHUB_RUN_ID}"
-          git switch -c "$branch"
-          git add content/public/research-digests.generated.json
-          git -c user.name='github-actions[bot]' \
-              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-              commit -m "research: publish weekly ML digest ${WEEK_OF}"
-          auth="$(printf 'x-access-token:%s' "$BLOG_REPO_TOKEN" | base64 --wrap=0)"
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" \
-            push --set-upstream origin "$branch"
-          unset auth
-          printf 'BLOG_BRANCH=%s\n' "$branch" >> "$GITHUB_ENV"
+          tag="research-${WEEK_OF}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            existing_url="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | select(.name == "weekly-digest.json") | .url')"
+            test -n "$existing_url"
+            curl --fail --silent --show-error --location \
+              --proto '=https' --proto-redir '=https' --tlsv1.2 \
+              --max-redirs 3 --max-time 30 \
+              --output "$RUNNER_TEMP/existing-weekly-digest.json" \
+              "$existing_url"
+            cmp --silent generated/weekly-digest.json "$RUNNER_TEMP/existing-weekly-digest.json" || {
+              echo "Immutable release ${tag} already exists with different content." >&2
+              exit 1
+            }
+            echo "Immutable release ${tag} already contains the exact candidate."
+            exit 0
+          fi
 
-      - name: Open blog pull request
-        env:
-          BLOG_REPO_TOKEN: ${{ secrets.BLOG_REPO_TOKEN }}
-        run: |
-          uv run --frozen python scripts/open_blog_pr.py \
-            --repo "$BLOG_REPO" \
-            --branch "$BLOG_BRANCH" \
-            --week-of '${{ needs.context.outputs.week_of }}'
+          gh release create "$tag" generated/weekly-digest.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Weekly ML Research Digest ${WEEK_OF}" \
+            --notes "Machine-readable, schema-validated public digest for HYOYOUL BLOG."
