@@ -3,7 +3,25 @@
 HYOYOUL BLOG의 공개 `Research` 카테고리에 매주 3~5편의 머신러닝
 논문을 묶은 한·영 다이제스트를 발행하는 자동화 저장소입니다.
 
-## 발행 흐름
+## Codex 전환 (2026-09-07)
+
+새 경로는 **비공개 GitHub Actions의 Python 자료 수집 → 구독 로그인 Codex의
+한·영 작성 → 이 공개 저장소의 독립 검증·immutable release → 기존 블로그 importer**입니다.
+Mac이 켜져 있을 필요가 없습니다. 이 공개 저장소에는 Codex OAuth 세션을 두지 않습니다.
+공개 `publish-codex-digest.yml`은 네 가지 데이터 입력(날짜, canonical base64 JSON,
+SHA-256, 예상 public main SHA)만 받으며, 원본 바이트를 다시 검증한 뒤 기존과 같은
+release·attestation 조건으로 게시합니다. 실패하면 소유자에게 일반적인 GitHub issue를
+생성하며 비밀값·후보 본문은 넣지 않습니다.
+
+초기 인증 및 비공개 canary 성공 전에는 새 자동 실행을 활성화하지 않습니다.
+HF 추론으로 자동 대체하지 않으며, 아래 HF 기반 구현은 이전 구조의 참고 자료입니다.
+전환 시 기존 `weekly-digest.yml`의 예약 실행은 비활성화합니다. 되살리는 것은 별도
+운영 결정이며 HF 유료 추론을 다시 사용할 수 있습니다.
+
+[Writing 아키텍처 문서·draw.io·Mermaid](https://www.hyoyoul.com/posts/research-automation-hf-to-codex)
+에서 전후 구조, 인증 갱신 경계, 비용 및 도입 순서를 확인할 수 있습니다.
+
+## 이전 HF 경로: 발행 흐름
 
 ```text
 ml-research GitHub Actions
@@ -42,7 +60,7 @@ publish job으로 넘깁니다. ML 저장소와 ML Intern은 비공개 블로그
 `config/ml-intern.ci.json`에 있습니다. 자동화 세션의 HF trace 업로드는
 비활성화되어 있습니다.
 
-## 필요한 GitHub Actions secrets
+## 이전 HF 경로: 필요한 GitHub Actions secrets
 
 `ml-research` 저장소의 Actions secrets에는 다음 값 하나만 등록합니다.
 
@@ -71,7 +89,7 @@ python3 scripts/validate_digest.py \
   --archive ../hyoyoul-blog-v1/content/public/research-digests.generated.json
 ```
 
-## 예약 실행
+## 이전 HF 경로: 예약 실행
 
 GitHub Actions cron은 **매주 일요일 오전 9시(Asia/Seoul, 일요일 00:00 UTC)** 에
 실행됩니다. 필요할 때는 `workflow_dispatch`로 수동 실행할 수도 있습니다.
