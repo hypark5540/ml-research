@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "id": "finance-2026-09-13",
+  "slug": "weekly-earnings-2026-09-13",
+  "weekOf": "2026-09-13",
+  "generatedAt": "2026-09-13T00:00:00Z",
+  "titleKo": "테스트: 실적과 현금흐름",
+  "titleEn": "Test: earnings and cash flow",
+  "excerptKo": "공식 자료를 확인하는 테스트입니다.",
+  "excerptEn": "A test of source verification.",
+  "editorNoteKo": "매출 성장과 현금흐름은 어떻게 다른가?",
+  "editorNoteEn": "How does revenue growth differ from cash generation?",
+  "reviews": [
+    {
+      "company": "Oracle",
+      "ticker": "ORCL",
+      "releaseDate": "2026-09-10",
+      "fiscalPeriod": "FY2027 Q1",
+      "sourceUrl": "https://investor.oracle.com/investor-news/news-details/2026/test/default.aspx",
+      "metrics": [
+        {
+          "labelKo": "매출",
+          "labelEn": "Revenue",
+          "value": "100",
+          "unit": "USD million",
+          "basis": "GAAP",
+          "period": "FY2027 Q1"
+        },
+        {
+          "labelKo": "주당순이익",
+          "labelEn": "Diluted EPS",
+          "value": "1.5",
+          "unit": "USD per share",
+          "basis": "GAAP",
+          "period": "FY2027 Q1"
+        },
+        {
+          "labelKo": "현금흐름",
+          "labelEn": "Cash flow",
+          "value": "-10",
+          "unit": "USD million",
+          "basis": "GAAP",
+          "period": "FY2027 Q1"
+        }
+      ],
+      "summaryKo": "이 수치는 단위 테스트용 가상 자료입니다.",
+      "summaryEn": "These are synthetic unit-test figures.",
+      "interpretationKo": "성장만으로 수익성을 판단하지 않습니다.",
+      "interpretationEn": "Growth alone does not establish profitability.",
+      "risksKo": [
+        "가상 수치입니다.",
+        "외부 검증된 자료가 아닙니다."
+      ],
+      "risksEn": [
+        "Synthetic figures.",
+        "Not externally verified."
+      ],
+      "watchKo": "다음 분기의 현금흐름을 확인합니다.",
+      "watchEn": "Check cash flow next quarter."
+    }
+  ],
+  "preview": [],
+  "coverageNoteKo": "가상 테스트 자료로 투자 판단에 사용할 수 없습니다.",
+  "coverageNoteEn": "Synthetic fixture, not investment information.",
+  "readTime": 5
+}

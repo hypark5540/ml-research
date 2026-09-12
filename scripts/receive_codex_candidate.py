@@ -17,6 +17,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from ml_research.models import WeeklyDigest
+from ml_research.finance_models import Digest as FinanceDigest
 from ml_research.public_scan import assert_public_text_has_no_secret
 
 MAX_CANDIDATE_BYTES = 45 * 1024
@@ -60,7 +61,7 @@ def strict_json(raw: bytes) -> Any:
 
 
 def receive_candidate(
-    event: Any, *, public_sha: str, today: date
+    event: Any, *, public_sha: str, today: date, series: str = "research"
 ) -> tuple[bytes, str, str]:
     """Validate the dispatch envelope and Python policy, retaining original bytes.
 
@@ -119,7 +120,9 @@ def receive_candidate(
         raise CandidateRejected("candidate_week_mismatch")
     try:
         assert_public_text_has_no_secret(raw.decode("utf-8"))
-        WeeklyDigest.model_validate(payload)
+        if series not in {"research", "finance"}:
+            raise ValueError("unsupported_series")
+        (FinanceDigest if series == "finance" else WeeklyDigest).model_validate(payload)
     except (ValueError, TypeError, RecursionError) as error:
         raise CandidateRejected("invalid_candidate") from error
     return raw, week_of, digest_sha
@@ -169,6 +172,9 @@ def main() -> int:
     receive = commands.add_parser("receive")
     receive.add_argument("--event-file", type=Path, required=True)
     receive.add_argument("--output", type=Path, required=True)
+    receive.add_argument(
+        "--series", choices=["research", "finance"], default="research"
+    )
     approval = commands.add_parser("check-response")
     approval.add_argument("--response-file", type=Path, required=True)
     approval.add_argument("--status", required=True)
@@ -197,6 +203,7 @@ def main() -> int:
             strict_json(read_bounded(args.event_file, MAX_EVENT_BYTES)),
             public_sha=os.environ.get("GITHUB_SHA", ""),
             today=datetime.now(ZoneInfo("Asia/Seoul")).date(),
+            series=args.series,
         )
         write_candidate(args.output, raw)
         args.output.with_suffix(".sha256").write_text(
